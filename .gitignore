@@ -14,7 +14,6 @@ env.bak/
 venv.bak/
 
 # 实验相关
-logs/
 checkpoints/
 forecast_vis/
 dataset/
