@@ -1,7 +1,7 @@
 # TimeMamba T3Time 多变量协议与 Residual Fusion 设计
 
 日期：2026-08-31  
-状态：已由 Lain 批准，等待实现计划  
+状态：设计段落已由 Lain 批准；规格审查通过，全文待 Lain 审阅
 范围：ETTh1 第一轮单模块筛选；不是最终论文架构
 
 ## 1. 目标
@@ -96,7 +96,7 @@ train、validation、test 均设置：
 - validation/test 也可以分块前向，但指标必须按元素数正确聚合；
 - 不得改变 `drop_last` 后保留的样本集合。
 
-micro-batch 是资源执行方式，不是新的模型变体。
+micro-batch 是资源执行方式，不是新的模型变体。同一 horizon 的 P0/A0/A1 使用相同 micro-batch 大小，并在筛选前通过三组 smoke test 确定和记录。它保留逻辑 batch、样本集合和 optimizer step 语义，但开启 dropout 时随机掩码及浮点运算顺序可能不同，不能声称与整批训练轨迹逐位等价。
 
 ### 5.4 N>1 张量修正
 
@@ -133,7 +133,7 @@ A0 在 P0 上只改变隐藏维选择：
 
 ### 6.3 A1：T3Time 官方代码式 residual
 
-A1 与 A0 共用同一 learned projection。新增的唯一模块为：
+A1 与 A0 使用同构、相同初始权重的 learned projection，但各自独立训练，不共用训练后的参数，也不从 A0 checkpoint 初始化 A1。新增的唯一模块为：
 
 ```text
 E = MSTF 原始数值 patch tokens      [B*N,P,768]
@@ -160,7 +160,34 @@ Z = Linear(768,d_ff)(Theta)         [B*N,P,d_ff]
 - `weight_decay=1e-3`
 - CosineAnnealingLR，`T_max=min(epochs,50)`，`eta_min=1e-6`
 - gradient clip：5
-- TimeMamba 自身的 d_model、patch、prompt、Mamba 层数和 dropout 在 P0/A0/A1 间不变
+- early-stopping patience：25
+- 保留当前 TimeMamba 的 bf16 执行方式；同一 horizon 的 P0/A0/A1 使用相同精度和单 GPU 执行配置，不宣称完全复制 T3Time 的数值计算轨迹
+
+“保留当前模型配置”具体指 `scripts/ETTh1_seq96.sh` 的模型参数，而不是 CLI 默认值：
+
+| 配置 | 固定值 |
+|---|---:|
+| d_model | 32 |
+| d_ff | 64 |
+| small_patch / small_stride | 8 / 4 |
+| large_patch / large_stride | 24 / 4 |
+| llm_layers | 24 |
+| dropout | 0.2 |
+| prompt_tokens | 16 |
+| num_pattern_types | 8 |
+| seq_len / label_len / enc_in | 96 / 0 / 7 |
+| percent / train_stride | 100 / 1 |
+
+其中 prompt 与 prototype 数量来自当前模型/入口默认值。本轮四个 horizon 均使用上表设置，只有 pred_len、逻辑 batch 和 epoch 上限按前表变化。
+
+每个 horizon、每个 seed 内的初始化与训练隔离要求：
+
+- P0/A0/A1 均从头独立训练，禁止跨变体 warm-start。
+- 三者的公共模块使用相同初始参数和 buffers，包括同一份冻结 Mamba 预训练权重。
+- A0/A1 的 projection 使用相同初始化，按标准 `nn.Linear` 初始化；A1 alpha 固定初始化为 0.5。
+- 构造新增模块时隔离其随机数消耗，或显式复制公共初始 state；不能仅依赖“相同 seed”保证公共权重相同。
+- 模型构造完成后重置训练 RNG；记录公共初始 state 和 projection 的校验摘要，并测试对应参数逐项相等。
+- “同一 projection”指相同结构和初始化，不表示训练中绑权，也不表示沿用 A0 训练结果。
 
 模型选择完全复刻 T3Time 官方代码语义：
 
@@ -203,7 +230,8 @@ Avg MAE = (MAE_96 + MAE_192 + MAE_336 + MAE_720) / 4
 
 - P0 不实例化 learned projection 或 alpha。
 - A0 实例化 projection，不实例化 alpha。
-- A1 实例化同构 projection 与 alpha。
+- A1 实例化同构且与 A0 相同初始化的 projection 与 alpha。
+- 各组公共参数及 buffers 在训练前逐项一致，禁止跨变体加载已训练 checkpoint。
 - A0/P0 的参数差只来自 projection；A1/A0 的参数差只来自 alpha。
 - projection 和 alpha 均获得有限非零梯度。
 
@@ -233,7 +261,7 @@ Avg MAE = (MAE_96 + MAE_192 + MAE_336 + MAE_720) / 4
 - Gate 0 失败：只修复数据、形状或协议，不进入 P0 长跑。
 - P0 出现 non-finite、OOM 或错误样本数：修复协议执行问题后重跑；不得直接调模型模块。
 - A0 未改善：仍允许按计划测试 A1，因为 residual 可能独立有效；保留 A0 负结果。
-- A1 未优于 A0：判定 residual 没有独立贡献，不把它写成有效模块。
+- A1 未优于 A0：记录为“当前单 seed、配置和协议下未观察到 residual 的独立收益”，不推广成普遍无效，也不把它写成已验证有效模块。MSE/MAE 一升一降时分别报告，不强行判定统一改善。
 - A1 有改善但未达到目标：结束路线 A，不继续在 A1 上堆模块；转入已批准的下一条独立模块路线。
 - A1 达标：进入 P0/A0/A1 三变体 3-seed 复验，再决定是否纳入最终架构。
 
@@ -264,3 +292,7 @@ Avg MAE = (MAE_96 + MAE_192 + MAE_336 + MAE_720) / 4
 - 四 horizon 串行运行脚本与结构化结果汇总。
 
 实现计划不得自动启动四个正式长跑，除非 Lain 在代码和 smoke test 审阅后另行批准。
+
+## 13. 规格审查记录
+
+2026-08-31 第一轮发现配置来源和跨变体初始化不明确；补齐第 5.3、6.3、7、9.2 和 10 节后，第二轮审查结果为 Approved，无剩余阻塞问题。模型代码和正式训练尚未开始。
