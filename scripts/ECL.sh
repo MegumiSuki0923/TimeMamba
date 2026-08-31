@@ -89,5 +89,11 @@ run_ecl 336
 run_ecl 720
 
 echo "" | tee -a "$log_file"
+echo ""
+echo "========================================"
+echo "自动清理日志并提取结果"
+echo "========================================"
+python utils/clean_log.py "$log_file"
+
 echo "=== 训练会话结束 ===" | tee -a "$log_file"
 echo "结束时间: $(date)" | tee -a "$log_file"

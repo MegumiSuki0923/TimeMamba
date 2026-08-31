@@ -200,5 +200,11 @@ $accelerate_bin launch --mixed_precision bf16 --num_processes $num_process --mai
   --model_comment "$comment"
 
 echo ""
+echo "========================================"
+echo "自动清理日志并提取结果"
+echo "========================================"
+python utils/clean_log.py "$log_file"
+
+echo ""
 echo "=== 训练会话结束 ==="
 echo "结束时间: $(date)"
