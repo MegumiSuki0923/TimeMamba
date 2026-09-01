@@ -15,6 +15,17 @@
 - P0、A0、A1均为独立从头训练；A1不继承A0训练权重。
 - 结果是单seed方向性证据，保留反向非确定性和正式梯度清理计数缺失等限制。
 
+“唯一变化”必须由正式运行产物核验，不能只依据当前工作树或状态文档。每组固定检查：
+
+- 训练入口及完整 argv；
+- 数据集、七变量整窗语义、DataLoader batch/shuffle/drop_last；
+- seed、公共初始化、A0/A1投影初始化和禁止warm-start；
+- Adam、weight decay、nominal/effective LR与lradj、patience=3；
+- bf16 Mamba、FiLM局部FP32；
+- 每轮Test、最低raw-Val选轮及四horizon等权平均。
+
+来源依次以正式目录的`source_snapshot/`、`manifest.json`、`command.json`、初始化/entry审计和结构化结果为准；当前`models/TimeMamba.py`及状态文档只作导航和辅助说明。若当前代码与正式快照不一致，必须按正式快照描述实验并明确差异。
+
 ## 3. 文档结构
 
 ### 3.1 顶部固定区域
@@ -31,7 +42,7 @@
 1. 实验编号、模块名称与验证问题。
 2. 直接基准及唯一变化。
 3. 保持不变的配置，避免把训练协议变化误算为模块贡献。
-4. 四个 horizon 的“修改前 → 修改后”表格，列出：选中轮、Test MSE、Test MAE、MSE/MAE差值。
+4. 四个 horizon 的“修改前 → 修改后”表格，分别列出基准选中轮和修改后选中轮、基准值、修改后值、MSE/MAE差值。
 5. Avg MSE/MAE及相对变化。
 6. 结果解释：正向、负向、混合结果及不能声称的事情。
 7. 正式训练日志、`comparison.json`、逐项`entry_result.json`和必要审计文件的相对路径。
@@ -42,12 +53,21 @@
 - A1：直接基准为A0；唯一变化是在同一投影前加入`Theta=alpha*H+(1-alpha)*E`，`alpha:[768]`初始0.5、无sigmoid/clamp。
 - A1段落额外给出相对P0的整体结果，但不把A0投影和A1 residual的贡献混为一项。
 
+所有差值统一定义为：
+
+```text
+delta = 修改后 - 直接基准
+relative_change = delta / 直接基准 * 100%
+```
+
+误差指标中负delta表示改善，正delta表示退化。计算使用源文件完整精度，表格统一展示6位小数，百分比展示2位；平均值先用完整精度计算，再舍入展示，不能先舍入逐项再求平均。
+
 ## 4. 来源
 
-- P0：`logs/ETTh1/ETTh1_96__2026-08-31-09-55.log`
-- A0：`results/a0/formal_20260831T1710/comparison.json`及`h*/train.log`
-- A1：`results/a1/formal_20260831T2341/comparison.json`及`h*/train.log`、`alpha_epochs.jsonl`
-- 模块定义：`models/TimeMamba.py`、已批准路线A规格及A0/A1状态文档。
+- P0：`logs/ETTh1/ETTh1_96__2026-08-31-09-55.log`及A0正式目录的`baseline.json`/基准指纹。
+- A0：`results/a0/formal_20260831T1710/comparison.json`、`baseline.json`、`source_snapshot/`，各horizon的`manifest.json`、`command.json`、`entry_result.json`、`completion.json`、`train.log`；初始化隔离证据来自`preflight/h*_p0/probe.json`和`preflight/h*_a0/probe.json`。
+- A1：`results/a1/formal_20260831T2341/comparison.json`、`reference_a0.json`、`source_snapshot/`，各horizon的`manifest.json`、`command.json`、`initialization.json`、`entry_audit.json`、`entry_result.json`、`alpha_epochs.jsonl`、`completion.json`、`train.log`；A0/A1单步隔离证据来自`preflight/`。
+- 模块定义优先使用上述正式`source_snapshot/models/TimeMamba.py`与manifest哈希；当前`models/TimeMamba.py`、已批准路线A规格及A0/A1状态文档只作辅助。
 
 写入前必须从结构化汇总与原始日志复核数字和选轮，不能只转抄状态文档。
 
@@ -65,7 +85,10 @@
 
 - A0、A1都具备完整的改动说明、逐horizon前后指标表、平均指标变化和日志路径。
 - 所有平均值与差值可由源文件复算。
+- A0/A1所有必需正式文件存在；各horizon状态为completed、来源未变化，manifest引用的基准/源码哈希一致。
+- “唯一变化”表必须逐项核对入口、数据/loader、初始化、优化器/LR、精度、早停和选轮口径；不能只复述实验名称。
 - 所有本地Markdown链接使用有效相对路径。
 - 正负结果、单seed和选择协议限制表述准确。
+- P0、A0、A1正式训练均没有逐步梯度清理计数。对应段落必须写明：不能用smoke的零计数、日志未见NaN或`nonfinite_reason=null`推断正式训练全程零清理；只允许说没有记录到显式中止或非有限评估指标。
 - 文档可以在不改已有模块段落结构的情况下追加新模块。
 - 不修改生产代码、实验日志或结果文件，不自动提交最终总结文档。
