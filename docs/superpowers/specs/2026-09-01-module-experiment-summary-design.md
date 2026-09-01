@@ -5,11 +5,11 @@
 
 ## 1. 目标
 
-建立一份面向后续模块筛选的统一总结文档，先完整收录 A0、A1，未来可以用同一结构追加 A2、B0 等实验。文档必须回答：模块改了什么、修改前后四个 horizon 与平均指标如何变化、正式日志和结构化结果在哪里、当前证据支持什么结论。
+建立一份面向后续模块筛选的统一总结文档，先完整收录 P0、A0、A1，未来可以用同一结构追加 A2、B0 等实验。文档必须回答：实验改了什么、修改前后四个 horizon 与平均指标如何变化、实验脚本和正式日志在哪里。
 
 ## 2. 证据核验规则（不作为最终文档独立章节）
 
-最终总结文档删除独立的“数据与口径”章节，但写入前仍必须按以下规则核验，必要限制只在对应实验的一句话结论中说明。
+最终总结文档删除独立的“数据与口径”章节，但写入前仍必须按以下规则核验。
 
 “唯一变化”必须由正式运行产物核验，不能只依据当前工作树或状态文档。内部固定检查：
 
@@ -33,7 +33,10 @@
 P0、A0、A1均使用相同、可复制的三项结构：
 
 1. **实验脚本**：给出可点击的脚本相对路径。
-2. **Best Epoch、MSE、MAE表格**：P0列四个horizon自身结果；A0列P0→A0；A1列A0→A1。各表末尾增加Avg MSE/MAE行，Best Epoch在Avg行用`—`。
+2. **Best Epoch、MSE、MAE表格**：
+   - P0固定列为`Horizon｜Best Epoch｜MSE｜MAE`。
+   - A0/A1固定列为`Horizon｜基准 Best Epoch｜基准 MSE｜基准 MAE｜实验 Best Epoch｜实验 MSE｜实验 MAE`。A0的基准为P0，A1的基准为A0。
+   - 各表末尾增加`Avg`行；所有Best Epoch单元格写`—`，MSE/MAE使用四horizon完整精度算术平均后展示。
 3. **日志文件**：列出正式训练日志、汇总结果和最关键审计文件的可点击相对路径。
 
 每个实验标题后只增加一句事实性模块说明：
@@ -42,14 +45,7 @@ P0、A0、A1均使用相同、可复制的三项结构：
 - A0：控制实验；在P0上将固定`H[:,:,:64]`改为`Linear(768,64)`，没有直接论文模块归因。
 - A1：根据T3Time，在A0上加入`Theta=alpha*H+(1-alpha)*E` residual fusion；`alpha:[768]`初始0.5，无sigmoid/clamp。
 
-所有差值统一定义为：
-
-```text
-delta = 修改后 - 直接基准
-relative_change = delta / 直接基准 * 100%
-```
-
-误差指标中负delta表示改善，正delta表示退化。计算使用源文件完整精度，表格统一展示6位小数，百分比展示2位；平均值先用完整精度计算，再舍入展示，不能先舍入逐项再求平均。
+表格不增加delta或百分比列；修改前后数值直接并排。数值统一展示6位小数；平均值先用源文件完整精度计算，再舍入展示，不能先舍入逐项再求平均。
 
 ## 4. 来源
 
@@ -57,6 +53,7 @@ relative_change = delta / 直接基准 * 100%
 - A0：`results/a0/formal_20260831T1710/comparison.json`、`baseline.json`、`source_snapshot/`，各horizon的`manifest.json`、`command.json`、`entry_result.json`、`completion.json`、`train.log`；初始化隔离证据来自`preflight/h*_p0/probe.json`和`preflight/h*_a0/probe.json`。
 - A1：`results/a1/formal_20260831T2341/comparison.json`、`reference_a0.json`、`source_snapshot/`，各horizon的`manifest.json`、`command.json`、`initialization.json`、`entry_audit.json`、`entry_result.json`、`alpha_epochs.jsonl`、`completion.json`、`train.log`；A0/A1单步隔离证据来自`preflight/`。
 - 模块定义优先使用上述正式`source_snapshot/models/TimeMamba.py`与manifest哈希；当前`models/TimeMamba.py`、已批准路线A规格及A0/A1状态文档只作辅助。
+- 三个实验脚本固定为：P0=`scripts/ETTh1.sh`、A0=`scripts/ETTh1_a0.sh`、A1=`scripts/ETTh1_a1.sh`。若当前脚本哈希与正式快照不一致，最终文档改为链接对应正式目录下的`source_snapshot/scripts/`版本并标明是运行快照；一致时链接当前脚本。
 
 写入前必须从结构化汇总与原始日志复核数字和选轮，不能只转抄状态文档。
 
