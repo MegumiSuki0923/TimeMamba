@@ -13,10 +13,12 @@ B4 的功能定义固定为：以修正后的 P0 为基础，只删除 Hierarchi
 
 ## 2. Git 与来源策略
 
-1. 从当前 `explore` 分支的已提交 HEAD 建立 `codex/timemamba-baseline`。
+1. 固定基点为包含本规格的提交 `b150443`；创建前再次确认目标目录、目标分支均不存在，然后仅执行一次 `git worktree add -b codex/timemamba-baseline /home/Lain/Code/TimeMamba/0823/timemamba-baseline b150443`。禁止在 dirty 源工作树切换分支。
 2. 以 B4 正式复验快照 `results/b_ablation/source_snapshot_b4_seedrep_20260902T130644/` 作为运行代码真值，不从当前大量 dirty/untracked 文件整体复制。
-3. 在新分支提交一份独立的“B4 正式基线”提交；不把源工作树其他用户改动加入该提交。
-4. 新 worktree 完成后保持 Git 工作树干净；本地 `dataset` 符号链接受 `.gitignore` 的 `dataset/` 规则保护，不进入提交。
+3. 快照自带的 `SHA256SUMS` 错误地包含其自身，完整 `sha256sum -c` 会仅在该自引用条目失败。迁移前应以 `manifest.json.source_sha256` 逐项校验 11 个源文件，并对 `SHA256SUMS` 排除自身条目后复核；该已知归档缺陷不写回历史快照。
+4. 在新分支提交一份独立的“B4 正式基线”实现提交；所有复制、暂存和提交命令都以目标路径为工作目录，只暂存规格列出的白名单文件。两个交付提交分别是已经存在的规格提交 `b150443` 和新分支的实现提交。
+5. 已提交基点包含 `logs/ETTh1/ETTh1_96_main_experiment_2026-08-29-23-39.log`。实现提交必须删除该跟踪日志，并在 `.gitignore` 中忽略 `logs/`、`results/` 和 `checkpoints/`，保证目标不携带历史实验产物。
+6. 新 worktree 完成后保持 Git 工作树干净；本地 `dataset` 符号链接受 `.gitignore` 的 `dataset/` 规则保护，不进入提交。
 
 ## 3. 正式入口形态
 
@@ -24,8 +26,9 @@ B4 的功能定义固定为：以修正后的 P0 为基础，只删除 Hierarchi
 
 - `models/TimeMamba_b4.py` 的验证逻辑迁移到 `models/TimeMamba.py`；
 - `run_b4.py` 的验证训练逻辑迁移到 `run_main.py`，导入主 `models.TimeMamba`；
-- `scripts/ETTh1_b4.sh` 的四 horizon 协议整理到 `scripts/ETTh1.sh`，显式记录 seed 2025；
+- `scripts/ETTh1.sh` 不使用未归档的 `scripts/ETTh1_b4.sh`。它从正式快照中的 `scripts/ETTh1_b4_seedrep.sh` 提取相同的四 horizon、LR、lradj 和公共参数，改为 seed 2025 并直接调用 `run_main.py`；正式基线不依赖 `tools/run_with_grad_monitor.py`；
 - 内部 `_B4Prompt` 等实验命名改为中性的 baseline 命名；不保留旧名称别名或兼容分支；
+- 删除 `variant=p0/a0/a1`、A0/A1 feature projection、residual alpha 及其 CLI 分支；固定使用 B4/P0 的前 64 隐维读出。删除无效的外部 `prompt_tokens` 与 `num_pattern_types` 参数，但在模型内部固定按 `4 meta + 6 pattern + 6 numerical、8 prototypes` 完整构造后删除 pattern 参数，以保留已验证 B4 的 RNG 消耗和初始化；
 - `baseline.md` 更新为新基线的来源、结构、配置、Val-only 证据和限制说明。
 
 共享文件从正式 B4 快照迁移：
@@ -57,14 +60,14 @@ B4 的功能定义固定为：以修正后的 P0 为基础，只删除 Hierarchi
 
 ### B4 等价性
 
-使用同一 seed 和真实配置比较正式 B4 快照与新主模型：
+建立可复现等价性夹具，固定 `variant=p0, seq_len=96, pred_len=96, d_ff=64, d_model=32, dropout=0.2, llm_layers=24, prompt_tokens=16, num_pattern_types=8, enc_in=7, small_patch/stride=8/4, large_patch/stride=24/4`。在两个隔离 Python 解释器或无模块缓存污染的独立导入空间中分别加载正式 B4 快照和目标主模型；每次构造前重置 Python、NumPy、PyTorch CPU/CUDA RNG。比较：
 
 - state dict 键集合相同；
 - 所有公共参数逐位一致；
-- 可训练参数量为 2,641,250；
+- h96 可训练参数量为 2,641,250；h192/h336/h720 分别为 `2,788,802 / 3,010,130 / 3,600,338`；
 - pattern prototypes/router 不存在；
 - meta 和 numerical 参数存在；
-- eval 模式固定输入输出一致；
+- eval 模式下使用固定、相同输入，输出 `torch.equal`；若底层 GPU kernel 不保证逐位确定，则至少要求严格数值近似并披露最大绝对差，不能静默降级；
 - 输出形状为 `[B, pred_len, 7]` 且有限。
 
 ### 训练 smoke
@@ -81,4 +84,4 @@ B4 的功能定义固定为：以修正后的 P0 为基础，只删除 Hierarchi
 
 ## 6. 交付状态
 
-最终汇报必须包含：目标路径、分支、两个新增提交、B4来源快照、迁移文件清单、dataset链接、Git干净状态、测试结果及任何未完成验证。不得把 B4 描述为所有数据集或所有 horizon 上普遍优于 P0；它是当前 ETTh1、四 horizon 等权 Val-only 口径下的最简可靠基线。
+最终汇报必须包含：目标路径、分支、规格提交 `b150443`、新分支实现提交、B4来源快照、迁移文件清单、被删除的历史跟踪日志、dataset链接、Git干净状态、测试结果及任何未完成验证。不得把 B4 描述为所有数据集或所有 horizon 上普遍优于 P0；它是当前 ETTh1、四 horizon 等权 Val-only 口径下的最简可靠基线。
