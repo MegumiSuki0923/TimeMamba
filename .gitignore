@@ -13,10 +13,13 @@ ENV/
 env.bak/
 venv.bak/
 
-# 实验相关
+# Local data and experiment artifacts
+dataset
+dataset/
 checkpoints/
 forecast_vis/
-dataset/
+logs/
+results/
 
 # IDE
 .vscode/

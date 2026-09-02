@@ -1,3 +1,8 @@
+"""TimeMamba minimal baseline：保留 meta/numerical prompt，删除 pattern 层。
+
+初始化时仍按已验证的 P0 顺序构造完整 prompt，再删除 pattern 参数，以保持
+正式 B4 实验的公共参数初始化。模型固定使用前 64 个 Mamba 隐藏维读出。
+"""
 from math import sqrt
 import os
 from pathlib import Path
@@ -9,6 +14,27 @@ from transformers import MambaModel
 from layers.Embed import PatchEmbedding
 from layers.StandardNorm import Normalize
 from layers.HierarchicalPrompt import HierarchicalDynamicPrompt
+
+
+class _BaselinePrompt(HierarchicalDynamicPrompt):
+    """正式基线 prompt：只输出 meta 与 numerical tokens。"""
+
+    def forward(self, s):
+        B = s.shape[0]
+        # ── meta tokens（与 P0 相同的 FP32 FiLM 路径）──
+        meta_base = self.meta_base.unsqueeze(0).expand(B, -1, -1)
+        with torch.autocast(device_type=s.device.type, enabled=False):
+            mod = self.meta_modulator(s.float())
+            scale, shift = mod.chunk(2, dim=-1)
+            scale = scale.unsqueeze(-1)
+            shift = shift.unsqueeze(-1)
+            meta_tokens = meta_base * (1 + scale) + shift
+        numerical_tokens = self.numerical_encoder(s)
+        tokens = torch.cat([meta_tokens, numerical_tokens], dim=1)
+        return self.norm(tokens), {
+            'meta_tokens': meta_tokens,
+            'numerical_tokens': numerical_tokens,
+        }
 import transformers
 
 # 屏蔽冗余的警告信息
@@ -222,19 +248,18 @@ class Model(nn.Module):
 
         # 3. 层次化动态 Prompt
         self.d_stat = 12
-        _total = getattr(configs, 'prompt_tokens', 16)
-        _num_meta = min(4, _total // 4)
-        _remaining = _total - _num_meta
-        _num_pattern = _remaining // 2
-        _num_numerical = _remaining - _num_pattern
-        self.hierarchical_prompt = HierarchicalDynamicPrompt(
+        # 固定使用正式 B4 配置。pattern 参数先构造、后删除，只为保持已验证的
+        # 公共参数初始化随机数流；它们不属于最终模型参数或前向路径。
+        self.hierarchical_prompt = _BaselinePrompt(
             d_stat=self.d_stat,
             d_llm=self.d_llm,
-            num_meta=_num_meta,
-            num_pattern=_num_pattern,
-            num_numerical=_num_numerical,
-            num_pattern_types=getattr(configs, 'num_pattern_types', 8),
+            num_meta=4,
+            num_pattern=6,
+            num_numerical=6,
+            num_pattern_types=8,
         )
+        del self.hierarchical_prompt.pattern_prototypes
+        del self.hierarchical_prompt.pattern_router
 
         # ============================================================
         # 多尺度时频融合模块（MSTF）
@@ -263,6 +288,11 @@ class Model(nn.Module):
 
         self.normalize_layers = Normalize(1, affine=True)
 
+    def readout_tokens(self, hidden):
+        """仅处理最后 P 个数值 tokens；不混入 prompt 位置。"""
+        hidden = hidden[:, -self.patch_nums:, :]
+        return hidden[:, :, :self.d_ff]
+
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None, return_prompt_info=False):
         if return_prompt_info:
             dec_out, prompt_info = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_prompt_info=True)
@@ -282,9 +312,6 @@ class Model(nn.Module):
         stats = self._compute_statistics(x_flat)  # [B*N, d_stat]
         prompt_embeddings, prompt_info = self.hierarchical_prompt(stats.to(torch.float32))
 
-        # C. 右路径处理
-        x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
-
         # ============================================================
         # 多尺度时频融合（MSTF）
         # ============================================================
@@ -298,7 +325,7 @@ class Model(nn.Module):
         mamba_out = self.llm_model(inputs_embeds=combined_embeddings).last_hidden_state
 
         # E. 输出处理与投影
-        dec_out = mamba_out[:, :, :self.d_ff]
+        dec_out = self.readout_tokens(mamba_out)
         dec_out = torch.reshape(dec_out, (-1, n_vars, dec_out.shape[-2], dec_out.shape[-1]))
         dec_out = dec_out.permute(0, 1, 3, 2).contiguous()
         dec_out = self.output_projection(dec_out[:, :, :, -self.patch_nums:])

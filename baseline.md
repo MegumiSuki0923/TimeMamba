@@ -1,18 +1,31 @@
-# 基线
-- 日期：2026-08-27
-- 状态：完成
-- 训练日志：explore_timellm-main/logs/ETTh1/ETTh1_512_base_2026-08-27_14:13.log
-- 训练脚本：scripts/ETTh1.sh
-- 实验方案：Time-LLM GPT2 原始代码，未做任何更改
+# TimeMamba Minimal Baseline
 
-- 参考来源：无
-- 运行方式：bash scripts/ETTh1.sh
-- 实验效果:
+本分支将已验证的 B4 结构作为正式主基线。它建立在修正后的 P0 上，唯一结构删除是 HierarchicalDynamicPrompt 的 pattern prototypes、pattern router 和 6 个 pattern tokens；meta FiLM 与 numerical tokens 保留。
 
-| pred_len | best MSE | best MAE(with best MSE) | best epoch | speed      |
-| -------- | -------- | ----------------------- | ---------- | ---------- |
-| 96       | 0.3902   | 0.4096                  | 3          | 31.18 it/s |
-| 192      | 0.4354   | 0.4391                  | 2          | 31.18 it/s |
-| 336      | 0.4745   | 0.4613                  | 2          | 31.00 it/s |
-| 720      | 0.4588   | 0.4729                  | 4          | 31.00 it/s |
-| Avg      | 0.4397   | 0.4457                  | -          | 31.09 it/s |
+## 固定结构
+
+- ETTh1 七变量整窗输入，模型内部仍按 `B*N` channel-independent 处理；
+- prompt 为 4 个 meta tokens + 6 个 numerical tokens；
+- small patch `8/4`、large patch `24/4` 与 FFT 幅值分支保留；
+- 冻结 24 层 Mamba-130M，固定取前 64 个隐藏维；
+- raw Validation loss 早停，patience 3；
+- 每轮计算 Test，最终报告最低 Val 轮次对应的 Test；模块选择采用 Val-only。
+
+## B4 证据
+
+ETTh1、seed 2025/2026/2027、pred_len 96/192/336/720 等权平均下，B4 相对 P0 的 Avg Validation loss 配对差值为：
+
+- seed 2025：`-0.0021385`
+- seed 2026：`-0.0041025`
+- seed 2027：`-0.0039473`
+- mean ± population std：`-0.0033961 ± 0.0008915`
+
+可训练参数在 h96 配置下由 2,679,466 降至 2,641,250。该结果支持把本结构作为当前 ETTh1 实验范围内的最简可靠基线，不证明 pattern 机制在所有数据集或所有 horizon 上普遍无效。
+
+## 来源
+
+运行真值来自源工作树归档：
+
+`results/b_ablation/source_snapshot_b4_seedrep_20260902T130644/`
+
+正式入口：`scripts/ETTh1.sh -> run_main.py -> models/TimeMamba.py`。

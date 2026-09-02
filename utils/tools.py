@@ -36,10 +36,11 @@ def adjust_learning_rate(accelerator, optimizer, scheduler, epoch, args, printou
 
 
 class EarlyStopping:
-    # save_mode 三态：False（不落盘）/ True（仅单轮 best 'checkpoint'）/
-    # 'top3'（落盘 checkpoint / checkpoint_ema / checkpoint_last 三份）
-    def __init__(self, accelerator=None, patience=7, verbose=False, delta=0, save_mode=True, logger=None,
-                 es_mode='single', ema_alpha=0.5):
+    """按当前 validation loss 早停，仅可选保存一个 best checkpoint。"""
+
+    def __init__(self, accelerator=None, patience=7, verbose=False, delta=0, save_mode=True, logger=None):
+        if not isinstance(save_mode, bool):
+            raise ValueError('save_mode must be a boolean')
         self.accelerator = accelerator
         self.patience = patience
         self.verbose = verbose
@@ -50,12 +51,6 @@ class EarlyStopping:
         self.delta = delta
         self.save_mode = save_mode
         self.logger = logger
-        self.es_mode = es_mode
-        self.ema_alpha = ema_alpha
-        self.ema_val_loss = None
-        self.ema_history = []
-        self.best_single_epoch = None
-        self.best_ema_epoch = None
 
     def _log(self, message):
         if self.logger is not None:
@@ -65,40 +60,7 @@ class EarlyStopping:
         else:
             self.accelerator.print(message)
 
-    def __call__(self, val_loss, model, path, epoch=None):
-        if self.es_mode == 'ema':
-            self.ema_history.append(val_loss)
-            if self.ema_val_loss is None:
-                self.ema_val_loss = val_loss
-            else:
-                self.ema_val_loss = self.ema_alpha * val_loss + (1.0 - self.ema_alpha) * self.ema_val_loss
-            if self.save_mode == 'top3' and val_loss < self.val_loss_min:
-                self.save_checkpoint(val_loss, model, path, tag='checkpoint')
-                self.best_single_epoch = epoch
-            score = -self.ema_val_loss
-            if self.best_score is None:
-                self.best_score = score
-                self.best_ema_epoch = epoch
-                if self.save_mode:
-                    self.save_checkpoint(val_loss, model, path, tag='checkpoint_ema')
-            elif score < self.best_score + self.delta:
-                self.counter += 1
-                self._log(
-                    f'EarlyStopping counter: {self.counter} out of {self.patience} '
-                    f'(ema_val={self.ema_val_loss:.6f})'
-                )
-                if self.counter >= self.patience:
-                    self.early_stop = True
-            else:
-                self.best_score = score
-                self.best_ema_epoch = epoch
-                if self.save_mode:
-                    self.save_checkpoint(val_loss, model, path, tag='checkpoint_ema')
-                self.counter = 0
-            if self.save_mode == 'top3':
-                self._save_raw(model, path, 'checkpoint_last')
-            return self.ema_val_loss
-
+    def __call__(self, val_loss, model, path):
         score = -val_loss
         if self.best_score is None:
             self.best_score = score
@@ -116,15 +78,12 @@ class EarlyStopping:
             self.counter = 0
         return None
 
-    def _save_raw(self, model, path, tag):
-        if self.accelerator is not None:
-            model = self.accelerator.unwrap_model(model)
-        torch.save(model.state_dict(), path + '/' + tag)
-
-    def save_checkpoint(self, val_loss, model, path, tag='checkpoint'):
+    def save_checkpoint(self, val_loss, model, path):
         if self.verbose:
             self._log(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-        self._save_raw(model, path, tag)
+        if self.accelerator is not None:
+            model = self.accelerator.unwrap_model(model)
+        torch.save(model.state_dict(), path + '/checkpoint')
         self.val_loss_min = val_loss
 
 

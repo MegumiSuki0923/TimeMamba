@@ -92,21 +92,22 @@ class Dataset_ETT_hour(Dataset):
 
 
     def __getitem__(self, index):
-        feat_id = index // self.n_windows
-        s_begin = (index % self.n_windows) * self.train_stride
+        if not 0 <= index < self.n_windows:
+            raise IndexError(index)
+        s_begin = index * self.train_stride
 
         s_end = s_begin + self.seq_len
         r_begin = s_end - self.label_len
         r_end = r_begin + self.label_len + self.pred_len
-        seq_x = self.data_x[s_begin:s_end, feat_id:feat_id + 1].clone()
-        seq_y = self.data_y[r_begin:r_end, feat_id:feat_id + 1].clone()
+        seq_x = self.data_x[s_begin:s_end].clone()
+        seq_y = self.data_y[r_begin:r_end].clone()
         seq_x_mark = self.data_stamp[s_begin:s_end].clone()
         seq_y_mark = self.data_stamp[r_begin:r_end].clone()
 
         return seq_x, seq_y, seq_x_mark, seq_y_mark
 
     def __len__(self):
-        return self.n_windows * self.enc_in
+        return self.n_windows
 
     def inverse_transform(self, data):
         return self.scaler.inverse_transform(data)
@@ -313,7 +314,6 @@ class Dataset_Custom(Dataset):
 
     def inverse_transform(self, data):
         return self.scaler.inverse_transform(data)
-
 
 
 

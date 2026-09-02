@@ -101,8 +101,6 @@ parser.add_argument('--llm_layers', type=int, default=24, help='Mamba-130m: 24 l
 parser.add_argument('--percent', type=int, default=100)
 parser.add_argument('--factor', type=int, default=3, help='attn factor')
 parser.add_argument('--des', type=str, default='Exp', help='exp description')
-parser.add_argument('--prompt_tokens', type=int, default=16, help='提示token总数（均分到meta/pattern/numerical三层）')
-parser.add_argument('--num_pattern_types', type=int, default=8, help='模式原型库大小（HierarchicalPrompt 中的原型数量）')
 
 # --- 优化参数 ---
 parser.add_argument('--num_workers', type=int, default=2, help='data loader num workers')
@@ -120,9 +118,6 @@ parser.add_argument('--use_amp', action='store_true', help='use mixed precision'
 parser.add_argument('--clip_grad', type=float, default=1.0, help='maximum gradient norm for clipping, set to 0 to disable')
 parser.add_argument('--result_json', type=str, default='', help='optional path to save structured run metrics')
 parser.add_argument('--save_forecast_vis', action='store_true', default=False, help='save last-window forecast CSV after training')
-parser.add_argument('--es_mode', type=str, default='ema', choices=['single', 'ema'],
-                    help='早停判据：single=单轮 val loss；ema=val loss 的 EMA 滑动平均（默认）')
-parser.add_argument('--es_ema_alpha', type=float, default=0.5, help='EMA 早停的平滑系数')
 
 args = parser.parse_args()
 set_random_seed(args.seed)
@@ -160,7 +155,8 @@ for ii in range(args.itr):
 
     config_message = (
         f"[Config] model={args.model} data={args.data} "
-        f"seq_len={args.seq_len} pred_len={args.pred_len} batch_size={args.batch_size}"
+        f"seq_len={args.seq_len} pred_len={args.pred_len} batch_size={args.batch_size} "
+        f"early_stop=val_loss patience={args.patience}"
     )
     accelerator.print(config_message)
 
@@ -221,9 +217,7 @@ for ii in range(args.itr):
     early_stopping = EarlyStopping(
         accelerator=accelerator,
         patience=args.patience,
-        save_mode='top3' if (args.save_checkpoint and args.es_mode == 'ema') else args.save_checkpoint,
-        es_mode=args.es_mode,
-        ema_alpha=args.es_ema_alpha,
+        save_mode=args.save_checkpoint,
     )
 
     # 记录每个 epoch 的耗时，用于计算预计剩余时间
@@ -272,10 +266,7 @@ for ii in range(args.itr):
                 
             model_optim.step()
 
-            # OneCycleLR 逐步调度；COS（CosineAnnealingLR）在 epoch 结束后调度
-            if args.lradj != 'COS':
-                scheduler.step()
-                
+            # 学习率统一在 epoch 末尾调度：COS → 余弦退火；type1 等 → adjust_learning_rate 阶梯衰减。
             if epoch == 0 and i < 10:
                 torch.cuda.synchronize()
             t_compute_end = time.time()
@@ -291,9 +282,19 @@ for ii in range(args.itr):
         epoch_cost_time = time.time() - epoch_time
         epoch_times.append(epoch_cost_time)
 
-        # COS 模式：按 epoch 步进余弦退火
+        # =========================================================
+        # 学习率调度（参考 Time-LLM run_main.py）
+        # - COS：按 epoch 步进余弦退火
+        # - type1 等：adjust_learning_rate 阶梯衰减（每轮减半），直接写 optimizer 的 lr
+        # =========================================================
         if args.lradj == 'COS':
             scheduler.step()
+            accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
+        elif args.lradj != 'TST':
+            if epoch == 0:
+                args.learning_rate = model_optim.param_groups[0]['lr']
+                accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
+            adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=True)
         
         # 计算预计剩余时间
         avg_epoch_time = np.mean(epoch_times)
@@ -356,7 +357,7 @@ for ii in range(args.itr):
         # =========================================================
         # 早停判断逻辑
         # =========================================================
-        early_stopping(vali_loss, model, path, epoch=epoch + 1)
+        early_stopping(vali_loss, model, path)
         if early_stopping.early_stop:
             accelerator.print("Early stopping")
             run_status = 'early_stopped'
@@ -434,33 +435,6 @@ for ii in range(args.itr):
 
         model.train()
 
-    # =========================================================
-    # top-3 checkpoint 的 test 评估（仅在 --save_checkpoint True 且 es_mode=ema 时落盘）
-    # 红线：test_from_ema 为唯一官方报告指标；其余两项仅作选择噪声诊断遥测，
-    # 严禁事后从三者中择优上报（后验测试集泄露）。
-    # =========================================================
-    top3_test = {}
-    if args.save_checkpoint and args.es_mode == 'ema':
-        unwrapped_model = accelerator.unwrap_model(model)
-        for tag in ('checkpoint', 'checkpoint_ema', 'checkpoint_last'):
-            ckpt_path = os.path.join(path, tag)
-            if not os.path.exists(ckpt_path):
-                continue
-            unwrapped_model.load_state_dict(
-                torch.load(ckpt_path, map_location=accelerator.device, weights_only=True)
-            )
-            t_loss, t_mae = vali(args, accelerator, model, test_data, test_loader,
-                                 criterion, mae_metric, show_progress=False)
-            key = {'checkpoint': 'test_from_best_val',
-                   'checkpoint_ema': 'test_from_ema',
-                   'checkpoint_last': 'test_from_last'}[tag]
-            top3_test[key] = float(t_loss)
-            top3_test[key + '_mae'] = float(t_mae)
-            accelerator.print(f"[Top3] {tag}: test_mse={t_loss:.7f} test_mae={t_mae:.7f}")
-        if top3_test:
-            top3_test['best_single_epoch'] = early_stopping.best_single_epoch
-            top3_test['best_ema_epoch'] = early_stopping.best_ema_epoch
-
     run_total_time = time.time() - run_start_time
     run_summaries.append({
         'run_index': ii + 1,
@@ -474,7 +448,6 @@ for ii in range(args.itr):
         'run_total_time_sec': float(run_total_time),
         'status': run_status,
         'nonfinite_reason': nonfinite_reason,
-        'top3_test': top3_test,
     })
     accelerator.print(f"{'=' * 60}")
     accelerator.print(f"Run total time: {format_time(run_total_time)}")

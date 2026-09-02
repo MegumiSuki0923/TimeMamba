@@ -125,11 +125,15 @@ class HierarchicalDynamicPrompt(nn.Module):
         # ── Layer 1：元信息 tokens ─────────────────────────
         meta_base = self.meta_base.unsqueeze(0).expand(B, -1, -1)  # [B, 4, d_llm]
 
-        mod = self.meta_modulator(s)               # [B, num_meta * 2]
-        scale, shift = mod.chunk(2, dim=-1)        # [B, num_meta] each
-        scale = scale.unsqueeze(-1)                # [B, num_meta, 1]
-        shift = shift.unsqueeze(-1)                # [B, num_meta, 1]
-        meta_tokens = meta_base * (1 + scale) + shift  # [B, 4, d_llm]
+        # bf16 的 scale 可能恰好变成 -1，使整个 meta token 经 LN 后归零；
+        # 该零 token 会在冻结 Mamba 的多层 RMSNorm 中放大反向梯度。
+        # 仅此小型 FiLM 路径使用 FP32，其余模块继续遵循外层 autocast。
+        with torch.autocast(device_type=s.device.type, enabled=False):
+            mod = self.meta_modulator(s.float())   # [B, num_meta * 2]
+            scale, shift = mod.chunk(2, dim=-1)    # [B, num_meta] each
+            scale = scale.unsqueeze(-1)           # [B, num_meta, 1]
+            shift = shift.unsqueeze(-1)           # [B, num_meta, 1]
+            meta_tokens = meta_base * (1 + scale) + shift  # [B, 4, d_llm]
 
         # ── Layer 2：模式 tokens ───────────────────────────
         router_logits = self.pattern_router(s)     # [B, num_pattern_types]
