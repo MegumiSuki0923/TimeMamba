@@ -13,10 +13,10 @@ B4 的功能定义固定为：以修正后的 P0 为基础，只删除 Hierarchi
 
 ## 2. Git 与来源策略
 
-1. 固定基点为包含本规格的提交 `b150443`；创建前再次确认目标目录、目标分支均不存在，然后仅执行一次 `git worktree add -b codex/timemamba-baseline /home/Lain/Code/TimeMamba/0823/timemamba-baseline b150443`。禁止在 dirty 源工作树切换分支。
+1. 创建前记录并固定当前已审查的 `explore` HEAD（`git rev-parse HEAD`），再次确认目标目录、目标分支均不存在，然后仅执行一次 `git worktree add -b codex/timemamba-baseline /home/Lain/Code/TimeMamba/0823/timemamba-baseline <固定的base-sha>`。禁止在 dirty 源工作树切换分支。
 2. 以 B4 正式复验快照 `results/b_ablation/source_snapshot_b4_seedrep_20260902T130644/` 作为运行代码真值，不从当前大量 dirty/untracked 文件整体复制。
 3. 快照自带的 `SHA256SUMS` 错误地包含其自身，完整 `sha256sum -c` 会仅在该自引用条目失败。迁移前应以 `manifest.json.source_sha256` 逐项校验 11 个源文件，并对 `SHA256SUMS` 排除自身条目后复核；该已知归档缺陷不写回历史快照。
-4. 在新分支提交一份独立的“B4 正式基线”实现提交；所有复制、暂存和提交命令都以目标路径为工作目录，只暂存规格列出的白名单文件。两个交付提交分别是已经存在的规格提交 `b150443` 和新分支的实现提交。
+4. 在新分支提交一份独立的“B4 正式基线”实现提交；所有复制、暂存和提交命令都以目标路径为工作目录，只暂存规格列出的白名单文件。最终汇报分别列出源分支的规格提交链、固定 base SHA 和新分支实现提交。
 5. 已提交基点包含 `logs/ETTh1/ETTh1_96_main_experiment_2026-08-29-23-39.log`。实现提交必须删除该跟踪日志，并在 `.gitignore` 中忽略 `logs/`、`results/` 和 `checkpoints/`，保证目标不携带历史实验产物。
 6. 新 worktree 完成后保持 Git 工作树干净；本地 `dataset` 符号链接受 `.gitignore` 的 `dataset/` 规则保护，不进入提交。
 
@@ -84,4 +84,4 @@ B4 的功能定义固定为：以修正后的 P0 为基础，只删除 Hierarchi
 
 ## 6. 交付状态
 
-最终汇报必须包含：目标路径、分支、规格提交 `b150443`、新分支实现提交、B4来源快照、迁移文件清单、被删除的历史跟踪日志、dataset链接、Git干净状态、测试结果及任何未完成验证。不得把 B4 描述为所有数据集或所有 horizon 上普遍优于 P0；它是当前 ETTh1、四 horizon 等权 Val-only 口径下的最简可靠基线。
+最终汇报必须包含：目标路径、分支、规格提交链、固定 base SHA、新分支实现提交、B4来源快照、迁移文件清单、被删除的历史跟踪日志、dataset链接、Git干净状态、测试结果及任何未完成验证。不得把 B4 描述为所有数据集或所有 horizon 上普遍优于 P0；它是当前 ETTh1、四 horizon 等权 Val-only 口径下的最简可靠基线。
